@@ -1,0 +1,13 @@
+# Build output
+sender
+receiver
+device
+mitm
+*.o
+
+# Test data
+out*
+*.bin
+
+# NEVER commit private keys (anyone with the repo could impersonate the devices)
+keys/*_priv.pem
