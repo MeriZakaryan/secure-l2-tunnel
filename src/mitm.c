@@ -16,7 +16,7 @@
 #include "netutil.h"
 #include "packet.h"
 
-enum { MODE_FORWARD, MODE_FLIP, MODE_REPLAY };
+enum { MODE_FORWARD, MODE_FLIP, MODE_REPLAY, MODE_HSTAMPER };
 
 static volatile sig_atomic_t running = 1;
 static void on_signal(int sig) { (void)sig; running = 0; }
@@ -27,7 +27,19 @@ static unsigned long long prot_seen = 0, attacks = 0;
 static uint8_t saved[FRAME_MAX];
 static size_t  saved_len = 0;
 
+// Handshake attack: flip one bit inside every handshake frame (0x88B5).
+// In HELLO/REPLY this hits the DH public value: exactly what a MITM must replace
+// to run its own Diffie-Hellman with each side.
+static void tamper_handshake(uint8_t *f, size_t len) {
+    if (mode != MODE_HSTAMPER || len < 14 + 4 + 64) return;
+    if (f[12] != 0x88 || f[13] != 0xB5) return;
+    f[14 + 4 + 32 + 10] ^= 0x01;   // after Ethernet header, 4-byte header and 32-byte nonce
+    attacks++;
+    printf("[MITM] tampered with handshake message type %u\n", f[17]);
+}
+
 static void left_to_right(int out_fd, uint8_t *f, size_t len) {
+    tamper_handshake(f, len);
     struct pkt_info pi;
     if (mode != MODE_FORWARD && pkt_parse_tcp(f, len, &pi) == 1 && pkt_is_protected(f, &pi)) {
         prot_seen++;
@@ -55,7 +67,7 @@ static void left_to_right(int out_fd, uint8_t *f, size_t len) {
 }
 
 static void usage(const char *prog) {
-    fprintf(stderr, "Usage: %s [-v] [-m forward|flip|replay] [-n N] <left_if> <right_if>\n", prog);
+    fprintf(stderr, "Usage: %s [-v] [-m forward|flip|replay|hs-tamper] [-n N] <left_if> <right_if>\n", prog);
     exit(1);
 }
 
@@ -68,6 +80,7 @@ int main(int argc, char *argv[]) {
             if      (strcmp(optarg, "forward") == 0) mode = MODE_FORWARD;
             else if (strcmp(optarg, "flip") == 0)    mode = MODE_FLIP;
             else if (strcmp(optarg, "replay") == 0)  mode = MODE_REPLAY;
+            else if (strcmp(optarg, "hs-tamper") == 0) mode = MODE_HSTAMPER;
             else usage(argv[0]);
             break;
         case 'n': {
@@ -91,9 +104,9 @@ int main(int argc, char *argv[]) {
     int right = raw_open(argv[optind + 1]);
     if (left < 0 || right < 0) return 1;
 
-    const char *names[] = { "forward", "flip", "replay" };
+    const char *names[] = { "forward", "flip", "replay", "hs-tamper" };
     printf("MITM running: %s <-> %s, mode %s", argv[optind], argv[optind + 1], names[mode]);
-    if (mode != MODE_FORWARD) printf(" (every %lu protected packets)", every);
+    if (mode == MODE_FLIP || mode == MODE_REPLAY) printf(" (every %lu protected packets)", every);
     printf(". Ctrl+C to stop.\n");
 
     struct pollfd pfd[2] = {
@@ -116,6 +129,7 @@ int main(int argc, char *argv[]) {
             ssize_t n = raw_recv(right, buf, sizeof(buf));
             if (n < 0) break;
             if (n > 0) {
+                tamper_handshake(buf, (size_t)n);
                 if (verbose) frame_print("R->L", buf, (size_t)n);
                 raw_send(left, buf, (size_t)n);
             }

@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <sys/types.h>
+#include <stdint.h>
 
 #define FRAME_MAX 2048   // larger than any frame we expect (1514 max with MTU 1500)
 
@@ -19,5 +20,8 @@ int raw_send(int fd, const unsigned char *buf, size_t len);
 
 // Print a one-line summary of a frame (MACs, IPs, ports, TCP flags, payload size).
 void frame_print(const char *tag, const unsigned char *f, size_t len);
+
+// Read the MAC address of an interface (source address of handshake frames).
+int if_get_mac(const char *ifname, uint8_t mac[6]);
 
 #endif

@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <net/if.h>             // if_nametoindex
+#include <sys/ioctl.h>          // ioctl, SIOCGIFHWADDR
 #include <arpa/inet.h>          // htons, ntohs, inet_ntop
 #include <sys/socket.h>
 #include <netpacket/packet.h>   // sockaddr_ll, packet_mreq, PACKET_OUTGOING
@@ -44,6 +45,12 @@ int raw_open(const char *ifname) {
     if (setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr, sizeof(mr)) < 0) {
         perror("setsockopt(PACKET_MR_PROMISC)"); close(fd); return -1;
     }
+
+    // Larger receive buffer: fewer frames dropped by the kernel during bursts
+    int rcvbuf = 4 * 1024 * 1024;   // 4 MB
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) < 0)
+        perror("setsockopt(SO_RCVBUF) (continuing)");
+
     return fd;
 }
 
@@ -129,4 +136,19 @@ void frame_print(const char *tag, const unsigned char *f, size_t len) {
            th.syn ? "S" : "", th.ack ? "A" : "", th.psh ? "P" : "",
            th.fin ? "F" : "", th.rst ? "R" : "",
            tot - ihl - thl);
+}
+
+int if_get_mac(const char *ifname, uint8_t mac[6]) {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);     // any socket works for this ioctl
+    if (fd < 0) { perror("socket"); return -1; }
+
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    snprintf(ifr.ifr_name, IFNAMSIZ, "%s", ifname);
+    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
+        perror("ioctl(SIOCGIFHWADDR)"); close(fd); return -1;
+    }
+    memcpy(mac, ifr.ifr_hwaddr.sa_data, 6);
+    close(fd);
+    return 0;
 }

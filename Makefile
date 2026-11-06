@@ -11,7 +11,7 @@ sender: src/sender.c
 receiver: src/receiver.c
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
-device: src/device.c src/netutil.c src/packet.c src/crypto.c src/netutil.h src/packet.h src/crypto.h
+device: src/device.c src/netutil.c src/packet.c src/crypto.c src/handshake.c src/netutil.h src/packet.h src/crypto.h src/handshake.h
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(LDLIBS)
 
 mitm: src/mitm.c src/netutil.c src/packet.c src/netutil.h src/packet.h src/crypto.h
