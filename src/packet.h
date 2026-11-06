@@ -12,6 +12,13 @@
 #define WAN_MTU        1500
 #define AAD_MAX        (4 + 4 + 1 + 60)          // src IP, dst IP, protocol, TCP header (max 60)
 
+// UDP tunnel mode
+#define TUN_PORT       9000
+#define TUN_VERSION    1
+#define TUN_TYPE_DATA  1
+#define TUN_HDR_LEN    10      // version (1) | type (1) | counter (8): the AAD
+#define TUN_INNER_MAX  (WAN_MTU - 20 - 8 - TUN_HDR_LEN - GCM_TAG_LEN)   // 1446-byte inner frame
+
 struct pkt_info {
     size_t ihl;      // IP header length
     size_t tot;      // IP total length (header + TCP header + payload)
@@ -31,8 +38,12 @@ int pkt_is_protected(const uint8_t *f, const struct pkt_info *pi);
 // Build AAD: src IP | dst IP | protocol | TCP header with checksum zeroed. Returns its length.
 size_t pkt_build_aad(const uint8_t *f, const struct pkt_info *pi, uint8_t *aad);
 
+// Returns 1 if f is an unfragmented IPv4/UDP packet with source or destination port == port,
+// and gives the offset and length of the UDP payload. Returns 0 otherwise.
+int pkt_parse_udp(const uint8_t *f, size_t len, uint16_t port, size_t *pl_off, size_t *pl_len);
+
 void pkt_set_ip_len(uint8_t *f, size_t new_tot);
-void pkt_fix_checksums(uint8_t *f);   // recompute IP header + TCP checksums
+void pkt_fix_checksums(uint8_t *f);   // recompute the IP header + TCP or UDP checksum
 
 uint64_t get_be64(const uint8_t *p);
 void     put_be64(uint8_t *p, uint64_t v);

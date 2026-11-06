@@ -46,6 +46,25 @@ int pkt_is_protected(const uint8_t *f, const struct pkt_info *pi) {
     return (sport == PROTECTED_PORT || dport == PROTECTED_PORT) && pi->pl_len > 0;
 }
 
+int pkt_parse_udp(const uint8_t *f, size_t len, uint16_t port, size_t *pl_off, size_t *pl_len) {
+    if (len < ETH_HDR_LEN + 20 || get16(f + 12) != 0x0800) return 0;
+    const uint8_t *ip = f + ETH_HDR_LEN;
+    size_t ihl = (size_t)(ip[0] & 0x0f) * 4;
+    size_t tot = get16(ip + 2);
+    if ((ip[0] >> 4) != 4 || ihl < 20 || ip[9] != 17) return 0;      // 17 = UDP
+    if (tot < ihl + 8 || ETH_HDR_LEN + tot > len) return 0;
+    if (get16(ip + 6) & 0x3fff) return 0;                             // fragment
+
+    const uint8_t *udp = ip + ihl;
+    if (get16(udp) != port && get16(udp + 2) != port) return 0;
+    size_t ulen = get16(udp + 4);                                     // UDP header + payload
+    if (ulen < 8 || ulen > tot - ihl) return 0;
+
+    *pl_off = ETH_HDR_LEN + ihl + 8;
+    *pl_len = ulen - 8;
+    return 1;
+}
+
 size_t pkt_build_aad(const uint8_t *f, const struct pkt_info *pi, uint8_t *aad) {
     const uint8_t *ip = f + ETH_HDR_LEN;
     memcpy(aad, ip + 12, 8);                      // source IP + destination IP
@@ -80,17 +99,24 @@ void pkt_fix_checksums(uint8_t *f) {
     put16(ip + 10, 0);
     put16(ip + 10, csum_fold(csum_add(0, ip, ihl)));
 
-    // TCP checksum: pseudo-header (src IP, dst IP, 0, protocol, TCP length) + TCP header + payload
-    uint8_t *tcp = ip + ihl;
-    size_t tcp_len = tot - ihl;
+    // TCP or UDP checksum: pseudo-header + whole segment/datagram
+    size_t csum_off;
+    if      (ip[9] == 6)  csum_off = 16;   // TCP checksum field offset
+    else if (ip[9] == 17) csum_off = 6;    // UDP checksum field offset
+    else return;
+
+    uint8_t *l4 = ip + ihl;
+    size_t l4_len = tot - ihl;
     uint8_t pseudo[12];
     memcpy(pseudo, ip + 12, 8);
     pseudo[8] = 0;
     pseudo[9] = ip[9];
-    put16(pseudo + 10, (uint16_t)tcp_len);
+    put16(pseudo + 10, (uint16_t)l4_len);
 
-    put16(tcp + 16, 0);
+    put16(l4 + csum_off, 0);
     uint32_t sum = csum_add(0, pseudo, sizeof(pseudo));
-    sum = csum_add(sum, tcp, tcp_len);
-    put16(tcp + 16, csum_fold(sum));
+    sum = csum_add(sum, l4, l4_len);
+    uint16_t c = csum_fold(sum);
+    if (ip[9] == 17 && c == 0) c = 0xffff;  // in UDP, 0 means "no checksum"
+    put16(l4 + csum_off, c);
 }

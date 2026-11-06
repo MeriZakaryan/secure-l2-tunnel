@@ -40,22 +40,34 @@ static void tamper_handshake(uint8_t *f, size_t len) {
 
 static void left_to_right(int out_fd, uint8_t *f, size_t len) {
     tamper_handshake(f, len);
-    struct pkt_info pi;
-    if (mode != MODE_FORWARD && pkt_parse_tcp(f, len, &pi) == 1 && pkt_is_protected(f, &pi)) {
+
+    // Find the protected data: TCP payload (in-place mode) or UDP payload (tunnel mode)
+    size_t off = 0, plen = 0;
+    int target = 0;
+    if (mode == MODE_FLIP || mode == MODE_REPLAY) {
+        struct pkt_info pi;
+        if (pkt_parse_tcp(f, len, &pi) == 1 && pkt_is_protected(f, &pi)) {
+            off = pi.pl_off; plen = pi.pl_len; target = 1;
+        } else if (pkt_parse_udp(f, len, TUN_PORT, &off, &plen) && plen > 0) {
+            target = 1;
+        }
+    }
+
+    if (target) {
         prot_seen++;
 
         if (mode == MODE_FLIP && prot_seen % every == 0) {
-            f[pi.pl_off + pi.pl_len / 2] ^= 0x01;   // flip the lowest bit of a middle byte
-            pkt_fix_checksums(f);                    // hide the change from TCP/IP checksums
+            f[off + plen / 2] ^= 0x01;          // flip the lowest bit of a middle byte
+            pkt_fix_checksums(f);               // hide the change from IP/TCP/UDP checksums
             attacks++;
             printf("[MITM] flipped 1 bit in protected packet #%llu\n", prot_seen);
         }
 
         if (mode == MODE_REPLAY) {
-            if (saved_len == 0) {                    // remember the first protected packet
+            if (saved_len == 0) {               // remember the first protected packet
                 memcpy(saved, f, len);
                 saved_len = len;
-            } else if (prot_seen % every == 0) {     // and inject it again later
+            } else if (prot_seen % every == 0) {
                 raw_send(out_fd, saved, saved_len);
                 attacks++;
                 printf("[MITM] replayed the first protected packet (at #%llu)\n", prot_seen);
