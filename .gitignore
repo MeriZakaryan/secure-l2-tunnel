@@ -11,3 +11,5 @@ out*
 
 # NEVER commit private keys (anyone with the repo could impersonate the devices)
 keys/*.pem
+
+logs/
